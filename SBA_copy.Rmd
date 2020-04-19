@@ -1,0 +1,114 @@
+---
+title: "Mapping US: Paycheck Protection Program (PPP) Report through April 16, 2020"
+author: "Jonathan Sanchez: jonathan.sanchez7@outlook.com / https://www.linkedin.com/in/jonathan-sanchez-816521b8"
+date: "4/19/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(magrittr)
+library(tigris)
+library(leaflet)
+library(leaflet.extras)
+library(usmap)
+library(ggplot2)
+library(sf)
+library(dplyr)
+library(spData)
+library(rgdal)
+###install.packages("tidyverse")
+list.files()
+
+ppp<- read.csv("SBA.csv")
+#mutate_amt
+ppp$Approved_amt<- as.numeric(gsub('[$,]', '', ppp$Approved.PPP.Amount))
+ppp$Approved_loans<- as.numeric(gsub('[,]', '', ppp$Approved.PPP.Loans))
+ppp$lat <- as.numeric(ppp$lat)
+ppp$long <- as.numeric(ppp$long)
+
+
+SBA_mainland <-  ppp %>% filter(match == "success")
+
+
+#Aprove Amt 
+Ap_amt<- ppp %>% select(State,Approved_amt,Approved.PPP.Amount) %>% rename(STPOSTAL = State) %>% mutate(Approved_amt_mill = round(Approved_amt/(10**6),0) )
+
+
+```
+
+
+
+
+```{r echo=FALSE, fig.height=5, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Aprove Amt 
+Ap_amt<- ppp %>% select(State,Approved_amt,Approved.PPP.Amount) %>% rename(STUSPS = State) %>% mutate(Approved_amt_mill = round(Approved_amt/(10**6),0) )
+
+
+
+
+
+#load Shape file
+my_spdf <- readOGR( 
+  dsn= paste0(getwd(),"/cb_2018_us_state_500k") ,
+  verbose=FALSE
+)
+
+
+
+
+
+#add data 
+my_spdf@data <- my_spdf@data %>% left_join(Ap_amt,by = "STUSPS")
+
+# Create a color palette for the map:
+#mypalette <- colorNumeric( palette="viridis", domain=my_spdf@data$Approved_amt, na.color="transparent")
+
+#quantile(my_spdf@data$Approved_amt_mill, c(0.1, 0.20, 0.30, 0.50, .70,.80,1),na.rm = T)
+
+my_bins <- c(620,879,  1351 , 1897 , 4150 , 7442 , 9014 ,33414)
+mypalette <- colorBin( palette="YlOrBr", domain=my_spdf@data$Approved_amt_mill, na.color="transparent", bins=my_bins)
+
+# Prepare the text for tooltips:
+mytext <- paste(
+    "State: ", my_spdf@data$NAME,"<br/>", 
+    "Approved Amt: ", my_spdf@data$Approved.PPP.Amount,"<br/>",
+    "Approved Loans: ", my_spdf@data$Approved.PPP.Loans,
+    sep="") %>%
+  lapply(htmltools::HTML)
+
+
+# Final Map
+m<- leaflet(my_spdf) %>% 
+  addTiles()  %>% 
+  setView(-93.65, 35.0285, zoom = 4) %>%
+  addPolygons( 
+    fillColor = ~mypalette(Approved_amt_mill), 
+    stroke=TRUE, 
+    fillOpacity = 0.9, 
+    color="white", 
+    weight=0.3,
+    label = mytext,
+    labelOptions = labelOptions( 
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "13px", 
+      direction = "auto"
+    )
+  ) %>%
+  addLegend( pal=mypalette, values=~Approved_amt_mill, opacity=0.9, title = "Approved amount in Millions USD ", position = "bottomleft" )
+
+m  
+
+
+#library(htmlwidgets)
+#saveWidget(m, file= "PPP_SBA.html")
+
+
+```
+
+###### source: https://www.sba.gov/document/report--paycheck-protection-program-ppp-report-through-april-16-2020-12-pm-est
+
+
+
+
+
