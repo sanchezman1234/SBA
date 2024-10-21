@@ -1,0 +1,834 @@
+---
+title: "Method_khera and kho"
+author: "Jonathan"
+date: '2024-10-21'
+output: html_document
+---
+####Data Prep
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+
+# Load necessary library for reproducibility
+set.seed(123)  # Set seed for consistent results
+
+# Define the sample size
+sample_size <- 10000
+
+# Generate the data with 10,000 rows
+data <- data.frame(
+  age = sample(40:80, sample_size, replace = TRUE),  # Random ages between 40 and 80
+  gender = sample(c("male", "female"), sample_size, replace = TRUE),
+  race = sample(c("white", "african_american", "hispanic", "asian"), sample_size, replace = TRUE),
+  totchol = sample(150:300, sample_size, replace = TRUE),  # Total cholesterol levels
+  hdl = sample(30:80, sample_size, replace = TRUE),  # HDL levels
+  systolic_bp = sample(110:180, sample_size, replace = TRUE),  # Systolic BP values
+  bp_treatment = sample(c(TRUE, FALSE), sample_size, replace = TRUE),
+  smoker = sample(c(TRUE, FALSE), sample_size, replace = TRUE),
+  diabetes = sample(c(TRUE, FALSE), sample_size, replace = TRUE),
+  follow_up_time = round(runif(sample_size, min = 1, max = 10), 1),  # Follow-up time in years
+  event = sample(0:1, sample_size, replace = TRUE), # Event status (0 = censored, 1 = event)
+  statin_use = sample(c(TRUE, FALSE), sample_size, replace = TRUE),
+  BMI =  sample(15:40, sample_size, replace = TRUE) 
+)
+
+
+## make numeric
+data$age <- as.numeric(data$age)
+data$bp_treatment <- as.numeric(data$bp_treatment)
+data$smoker <- as.numeric(data$smoker)
+data$diabetes <- as.numeric(data$diabetes)
+data$statin_use <- as.numeric(data$statin_use)
+#race clean
+# Standardize race categories
+data$race <- tolower(data$race)
+data$race[!(data$race %in% c("white", "african_american"))] <- "other"
+
+
+# Check the first few rows to ensure everything looks correct
+head(data)
+
+
+
+# Assuming your data is in a data frame called 'data'
+# Summarize continuous variables
+summary(data)
+
+```
+
+
+
+```{r}
+#Risk Calculation :
+# Function to calculate ASCVD risk
+calculate_ascvd_risk <- function(patient) {
+  # Extract patient variables and convert to appropriate types
+  age <- as.numeric(patient['age'])
+  gender <- as.character(patient['gender'])
+  race <- as.character(patient['race'])
+  totchol <- as.numeric(patient['totchol'])
+  hdl <- as.numeric(patient['hdl'])
+  systolic_bp <- as.numeric(patient['systolic_bp'])
+  bp_treatment <- as.numeric(patient['bp_treatment'])
+  smoker <- as.numeric(patient['smoker'])
+  diabetes <- as.numeric(patient['diabetes'])
+  
+  # Check for NA or zero values that could cause errors
+  if (is.na(age) || age <= 0 || is.na(totchol) || totchol <= 0 || is.na(hdl) || hdl <= 0 || is.na(systolic_bp) || systolic_bp <= 0) {
+    return(NA)
+  }
+  
+  # Natural logarithm of variables
+  age_ln <- log(age)
+  totchol_ln <- log(totchol)
+  hdl_ln <- log(hdl)
+  sbp_ln <- log(systolic_bp)
+  
+  # Initialize coefficients based on race and gender
+  if (race == "white" & gender == "male") {
+    # Coefficients for White Male
+    beta <- list(
+      age_ln = 12.344,
+      totchol_ln = 11.853,
+      age_totchol_ln = -2.664,
+      hdl_ln = -7.990,
+      age_hdl_ln = 1.769,
+      sbp_ln = 1.797,
+      bp_treatment = 0,
+      smoker = 0.658,
+      diabetes = 0.691,
+      mean_beta = 61.18,
+      baseline_survival = 0.9144
+    )
+  } else if (race == "white" & gender == "female") {
+    # Coefficients for White Female
+    beta <- list(
+      age_ln = -29.799,
+      totchol_ln = 4.884,
+      age_totchol_ln = 13.540,
+      hdl_ln = -3.114,
+      age_hdl_ln = -13.578,
+      sbp_ln = 2.019,
+      bp_treatment = 0,
+      smoker = 0.690,
+      diabetes = 0.874,
+      mean_beta = -29.18,
+      baseline_survival = 0.9665
+    )
+  } else if (race == "african_american" & gender == "male") {
+    # Coefficients for African American Male
+    beta <- list(
+      age_ln = 2.469,
+      totchol_ln = 0.302,
+      age_totchol_ln = 0,
+      hdl_ln = -0.307,
+      age_hdl_ln = 0,
+      sbp_ln = 1.916,
+      bp_treatment = 0,
+      smoker = 0.549,
+      diabetes = 0.645,
+      mean_beta = 19.54,
+      baseline_survival = 0.8954
+    )
+  } else if (race == "african_american" & gender == "female") {
+    # Coefficients for African American Female
+    beta <- list(
+      age_ln = 17.114,
+      totchol_ln = 0.939,
+      age_totchol_ln = -18.920,
+      hdl_ln = -7.653,
+      age_hdl_ln = 1.887,
+      sbp_ln = 1.797,
+      bp_treatment = 0,
+      smoker = 0.691,
+      diabetes = 0.874,
+      mean_beta = -29.18,
+      baseline_survival = 0.9533
+    )
+  } else {
+    # Use White coefficients for "other" races
+    if (gender == "male") {
+      beta <- list(
+        age_ln = 12.344,
+        totchol_ln = 11.853,
+        age_totchol_ln = -2.664,
+        hdl_ln = -7.990,
+        age_hdl_ln = 1.769,
+        sbp_ln = 1.797,
+        bp_treatment = 0,
+        smoker = 0.658,
+        diabetes = 0.691,
+        mean_beta = 61.18,
+        baseline_survival = 0.9144
+      )
+    } else {
+      beta <- list(
+        age_ln = -29.799,
+        totchol_ln = 4.884,
+        age_totchol_ln = 13.540,
+        hdl_ln = -3.114,
+        age_hdl_ln = -13.578,
+        sbp_ln = 2.019,
+        bp_treatment = 0,
+        smoker = 0.690,
+        diabetes = 0.874,
+        mean_beta = -29.18,
+        baseline_survival = 0.9665
+      )
+    }
+  }
+  
+  # Calculate the linear predictor
+  lin_pred <- (beta$age_ln * age_ln) +
+              (beta$totchol_ln * totchol_ln) +
+              (beta$age_totchol_ln * age_ln * totchol_ln) +
+              (beta$hdl_ln * hdl_ln) +
+              (beta$age_hdl_ln * age_ln * hdl_ln) +
+              (beta$sbp_ln * sbp_ln) +
+              (beta$bp_treatment * bp_treatment) +
+              (beta$smoker * smoker) +
+              (beta$diabetes * diabetes)
+  
+  # Calculate the risk
+  risk <- 1 - (beta$baseline_survival) ^ exp(lin_pred - beta$mean_beta)
+  
+  # Ensure risk is between 0 and 1
+  risk <- min(max(risk, 0), 1)
+  
+  return(risk)
+}
+
+# Apply the function to each patient
+data$PCE_risk  <- apply(data, 1, calculate_ascvd_risk)
+
+
+
+# View the updated data frame
+head(data)
+
+```
+
+###Khera
+```{r}
+# Load necessary packages
+library(dplyr)
+library(survival)
+#library(survAUC)
+#library(rms)
+library(boot)
+library(cmprsk)
+library(DescTools)
+library(nricens)
+
+# 1. Data Preparation and BMI Stratification
+# Stratify BMI into categories
+data$BMI_category <- cut(
+  data$BMI,
+  breaks = c(-Inf, 18.5, 25, 30, 35, Inf),
+  labels = c(
+    "Underweight",
+    "Normal weight",
+    "Overweight",
+    "Mild obesity",
+    "Moderate to severe obesity"
+  )
+)
+
+# 2. Estimating 10-Year ASCVD Risk Using PCE
+# Define a function to calculate PCE risk based on published equations
+# For brevity, assume a function 'calculate_pce_risk' is defined
+
+# Example function (simplified and needs actual coefficients)
+#calculate_pce_risk <- function(age, sex, race, totchol, hdlchol, sysbp, bp_med, smoker, diabetes) {
+  # PCE coefficients would be used here
+  # Placeholder for actual risk calculation
+  #return(risk_score)
+#}
+
+# Apply the function to each participant
+
+
+# 3. Trend Analysis Across BMI Categories
+# For continuous variables (e.g., Age)
+trend_test_age <- lm(age ~ as.numeric(BMI_category), data = data)
+summary(trend_test_age)
+
+# For categorical variables (e.g., Smoking_Status)
+table_smoking <- table(data$BMI_category, data$smoker)
+CochranArmitageTest(table_smoking)
+
+# 4. Comparing Estimated Risk with Observed Event Rates
+observed_events <- data %>%
+  group_by(BMI_category) %>%
+  summarize(
+    observed_rate = mean(event),
+    estimated_risk = mean(PCE_risk)
+  )
+
+# 5. Model Discrimination Using Harrell's C Statistic
+# Overall C statistic
+cox_model <- coxph(Surv(follow_up_time, event) ~ PCE_risk, data = data)
+c_stat <- summary(cox_model)$concordance[1]
+c_stat_se = summary(cox_model)$concordance[2]
+lower_ci = c_stat - 1.96 * c_stat_se
+upper_ci = c_stat + 1.96 * c_stat_se
+
+c_stat_overall<- data_frame(c_stat,lower_ci,upper_ci)
+
+summary(cox_model)
+
+# C statistic by BMI category
+c_stats_by_BMI <- data %>%
+  group_by(BMI_category) %>%
+  do({
+    model = coxph(Surv(follow_up_time, event) ~ PCE_risk, data = .)
+    c_stat = summary(model)$concordance[1]
+    data.frame(C_stat = c_stat)
+  })
+
+
+
+# 6. Risk Group Categorization
+data$Risk_Group <- cut(
+  data$PCE_risk,
+  breaks = c(-Inf, 0.05, 0.075, 0.20, Inf),
+  labels = c("Low", "Borderline", "Intermediate", "High")
+)
+
+# C statistic by BMI category and confidence interval
+library(dplyr)
+library(survival)
+
+c_stats_by_Risk_group <- data %>%
+  group_by(Risk_Group) %>%
+  do({
+    model = coxph(Surv(follow_up_time, event) ~ PCE_risk, data = .)
+    # Extract c-statistic and standard error
+    c_stat = summary(model)$concordance[1]
+    c_stat_se = summary(model)$concordance[2]
+    # Calculate 95% confidence intervals
+    lower_ci = c_stat - 1.96 * c_stat_se
+    upper_ci = c_stat + 1.96 * c_stat_se
+    data.frame(C_stat = c_stat,
+               Lower_CI = lower_ci,
+               Upper_CI = upper_ci)
+  })
+
+
+# 7. Calibration Assessment
+# Calibration plot using rms package
+ddist <- datadist(data)
+options(datadist = "ddist")
+calibration_model <- cph(Surv(follow_up_time, event) ~ PCE_risk, data = data, x = TRUE, y = TRUE, surv = TRUE)
+cal <- calibrate(calibration_model, method = "boot", B = 1000)
+plot(cal, xlab = "Estimated 10-Year ASCVD Risk", ylab = "Observed 10-Year ASCVD Risk")
+
+# 8. Expected-to-Observed Risk Ratios
+E_O_func <- function(data, indices) {
+  d <- data[indices, ]
+  Expected <- sum(d$PCE_risk)
+  Observed <- sum(d$event)
+  E_O_ratio <- Expected / Observed
+  return(E_O_ratio)
+}
+
+# Bootstrap E/O ratios for each BMI category
+E_O_bootstrap <- data %>%
+  group_by(BMI_category) %>%
+  do({
+    boot_obj <- boot(data = ., statistic = E_O_func, R = 1000)
+    ci <- boot.ci(boot_obj, type = "perc")$percent[4:5]
+    data.frame(
+      E_O_ratio = boot_obj$t0,
+      CI_lower = ci[1],
+      CI_upper = ci[2]
+    )
+  })
+
+
+E_O_bootstrap_by_risk_group <- data %>%
+  group_by(Risk_Group) %>%
+  do({
+    boot_obj <- boot(data = ., statistic = E_O_func, R = 1000)
+    ci <- boot.ci(boot_obj, type = "perc")$percent[4:5]
+    data.frame(
+      E_O_ratio = boot_obj$t0,
+      CI_lower = ci[1],
+      CI_upper = ci[2]
+    )
+  })
+
+
+# 9. Subgroup Analyses
+# Calibration by sex
+calibration_by_sex <- data %>%
+  group_by(gender) %>%
+  do({
+    model <- cph(Surv(Time_to_Event, ASCVD_Event) ~ PCE_risk, data = ., x = TRUE, y = TRUE, surv = TRUE)
+    cal <- calibrate(model, method = "boot", B = 1000)
+    list(calibration = cal)
+  })
+
+# 10. Model Validation in Different Cohorts
+# Validation in original PCE cohorts
+original_cohorts <- c("ARIC", "CARDIA", "CHS")
+data_original <- data %>% filter(Cohort %in% original_cohorts)
+
+# Validation in contemporary cohorts
+contemporary_cohorts <- c("DHS", "FHS", "JHS", "MESA", "REGARDS")
+data_contemporary <- data %>% filter(Cohort %in% contemporary_cohorts)
+
+# Perform similar analyses in each subset
+
+# 11. Adding Obesity and Inflammation Measures
+# Refit the PCE model
+refit_model <- coxph(Surv(Time_to_Event, ASCVD_Event) ~ Age + Sex + Race + Total_Cholesterol + HDL_Cholesterol +
+                       Systolic_BP + HTN_Treatment + Diabetes + Smoking_Status, data = data)
+
+# Add BMI, waist circumference, hsCRP
+extended_model <- update(refit_model, . ~ . + BMI + Waist_Circumference + hsCRP)
+summary(extended_model)
+
+# 12. Comparing Model Performance
+# C statistics
+c_stat_refit <- summary(refit_model)$concordance[1]
+c_stat_extended <- summary(extended_model)$concordance[1]
+delta_c <- c_stat_extended - c_stat_refit
+
+# Net Reclassification Improvement
+nri_result <- nribin(
+  event = data$ASCVD_Event,
+  p.std = predict(refit_model, type = "risk"),
+  p.new = predict(extended_model, type = "risk"),
+  cut = c(0.05, 0.075, 0.20)
+)
+print(nri_result)
+
+# 13. Sensitivity Analyses
+# Example: Excluding individuals who started statins
+data_no_statins <- data %>% filter(Statin_Initiated == "No")
+# Refit models and perform analyses on this subset
+
+# 14. Competing Risks Analysis
+# Create an event variable where:
+# 0 = censored, 1 = ASCVD event, 2 = non-ASCVD death
+data$EventType <- with(data, ifelse(ASCVD_Event == 1, 1, ifelse(Non_ASCVD_Death == 1, 2, 0)))
+
+# Fit Fine and Gray model
+fg_model <- crr(
+  ftime = data$Time_to_Event,
+  fstatus = data$EventType,
+  cov1 = as.matrix(data$PCE_risk)
+)
+summary(fg_model)
+
+```
+
+
+
+###Ko 2020 
+
+```{r}
+# Load necessary packages
+library(cmprsk)   # For competing risks analysis
+library(timeROC)  # For time-dependent ROC curves
+library(mice)     # For multiple imputation
+library(dplyr)    # For data manipulation
+library(ggplot2)  # For plotting
+library(survival) # For survival analysis
+
+# Assume 'data' is your dataframe with necessary variables
+# Variables include: age, gender, race, total_cholesterol, hdl_cholesterol,
+# systolic_bp, bp_treatment, smoker, diabetes, ldl_cholesterol,
+# chronic_kidney_disease, statin_use, cancer_history, hemodialysis,
+# event (ASCVD event indicator), time (follow-up time)
+
+# Step 1: Calculate Predicted Risks Using FRS and PCE Equations
+# Define functions to calculate FRS and PCE risk scores
+# Note: Use actual coefficients from the published models
+
+calculate_frs <- function(age, total_cholesterol, hdl_cholesterol, systolic_bp, bp_treatment, smoker, diabetes, gender) {
+  # Implement the FRS calculation using appropriate coefficients
+  # For demonstration, placeholders are used
+  # Replace placeholders with actual coefficients
+  risk <- rep(NA, length(age))
+  # ... [Insert calculation code here] ...
+  return(risk)
+}
+
+calculate_pce <- function(age, total_cholesterol, hdl_cholesterol, systolic_bp, bp_treatment, smoker, diabetes, gender, race) {
+  # Implement the PCE calculation using appropriate coefficients
+  risk <- rep(NA, length(age))
+  # ... [Insert calculation code here] ...
+  return(risk)
+}
+
+# Calculate predicted risks
+data$frs_risk <- calculate_frs(
+  age = data$age,
+  total_cholesterol = data$total_cholesterol,
+  hdl_cholesterol = data$hdl_cholesterol,
+  systolic_bp = data$systolic_bp,
+  bp_treatment = data$bp_treatment,
+  smoker = data$smoker,
+  diabetes = data$diabetes,
+  gender = data$gender
+)
+
+data$pce_risk <- calculate_pce(
+  age = data$age,
+  total_cholesterol = data$total_cholesterol,
+  hdl_cholesterol = data$hdl_cholesterol,
+  systolic_bp = data$systolic_bp,
+  bp_treatment = data$bp_treatment,
+  smoker = data$smoker,
+  diabetes = data$diabetes,
+  gender = data$gender,
+  race = data$race
+)
+
+# Step 2: Calculate Observed Risks Using Kalbfleisch–Prentice Estimator
+# Prepare data for competing risks analysis
+data$time_5yr <- pmin(data$time, 5)  # Censor at 5 years
+data$event_5yr <- ifelse(data$time > 5, 0, data$event)  # Adjust event indicator
+
+# Calculate cumulative incidence function
+ci <- cuminc(ftime = data$time_5yr, fstatus = data$event_5yr, cencode = 0)
+
+# Extract cumulative incidence at 5 years for the event of interest (event = 1)
+idx_5yr <- which.min(abs(ci$time - 5))
+cum_inc_5yr <- ci$est[[1]][idx_5yr]
+
+# Step 3: Calculate 95% Confidence Intervals Using Wald-Based Approach
+variance_5yr <- ci$var[[1]][idx_5yr]
+se_5yr <- sqrt(variance_5yr)
+z_value <- qnorm(0.975)  # 95% CI
+lower_ci <- cum_inc_5yr - z_value * se_5yr
+upper_ci <- cum_inc_5yr + z_value * se_5yr
+
+# Step 4: Plot Predicted vs Observed Risks Across Deciles
+# Divide data into deciles based on predicted risk
+data <- data %>% mutate(decile = ntile(frs_risk, 10))
+
+# Initialize results dataframe
+results <- data.frame(
+  decile = integer(),
+  mean_predicted_risk = numeric(),
+  observed_risk = numeric(),
+  lower_ci = numeric(),
+  upper_ci = numeric()
+)
+
+# Loop through each decile to calculate observed risks
+for (i in 1:10) {
+  decile_data <- data %>% filter(decile == i)
+  mean_pred_risk <- mean(decile_data$frs_risk, na.rm = TRUE)
+  
+  ci_decile <- cuminc(
+    ftime = decile_data$time_5yr,
+    fstatus = decile_data$event_5yr,
+    cencode = 0
+  )
+  
+  idx_5yr_decile <- which.min(abs(ci_decile$time - 5))
+  cum_inc_5yr_decile <- ci_decile$est[[1]][idx_5yr_decile]
+  variance_5yr_decile <- ci_decile$var[[1]][idx_5yr_decile]
+  se_5yr_decile <- sqrt(variance_5yr_decile)
+  lower_ci_decile <- cum_inc_5yr_decile - z_value * se_5yr_decile
+  upper_ci_decile <- cum_inc_5yr_decile + z_value * se_5yr_decile
+  
+  results <- rbind(results, data.frame(
+    decile = i,
+    mean_predicted_risk = mean_pred_risk,
+    observed_risk = cum_inc_5yr_decile,
+    lower_ci = lower_ci_decile,
+    upper_ci = upper_ci_decile
+  ))
+}
+
+# Create calibration plot
+ggplot(results, aes(x = mean_predicted_risk, y = observed_risk)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.02) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  xlab("Mean Predicted Risk (%)") +
+  ylab("Observed Risk (%)") +
+  ggtitle("Calibration Plot")
+
+# Step 5: Calculate the C Statistic Using timeROC Package
+roc_frs <- timeROC(
+  T = data$time_5yr,
+  delta = data$event_5yr,
+  marker = data$frs_risk,
+  cause = 1,
+  weighting = "marginal",
+  times = 5
+)
+
+auc_frs <- roc_frs$AUC[2]
+print(paste("C statistic for FRS at 5 years:", auc_frs))
+
+# Step 6: Subgroup Analyses (Age and Sex)
+# Example for males
+data_male <- data %>% filter(gender == "male")
+# Repeat Steps 2-5 for data_male
+
+# Step 7: Multiple Imputation for Missing Smoking Status
+# Identify variables for imputation
+vars_for_imputation <- c("age", "total_cholesterol", "hdl_cholesterol", "systolic_bp",
+                         "bp_treatment", "smoker", "diabetes", "gender", "race",
+                         "event", "time")
+
+# Perform multiple imputation
+imputed_data <- mice(data[vars_for_imputation], m = 10, method = 'pmm', seed = 123)
+
+# Analyze each imputed dataset
+imputed_results <- with(imputed_data, {
+  # Insert analysis code here
+  # For each imputed dataset, repeat Steps 1-5
+})
+
+# Pool results across imputed datasets
+pooled_results <- pool(imputed_results)
+
+# Step 8: Analysis in Statin-Eligible Cohort
+statin_eligible_data <- data %>%
+  filter(age >= 40 & age <= 75,
+         diabetes == 0,
+         ldl_cholesterol < 5,
+         chronic_kidney_disease == 0,
+         statin_use == 0,
+         cancer_history == 0,
+         hemodialysis == 0)
+
+# Repeat Steps 1-5 for statin_eligible_data
+
+```
+
+
+
+```{r}
+# Loop through each decile to calculate observed risks
+data <- data %>% mutate(decile = ntile(PCE_risk, 10))
+for (i in 1:10) {
+  decile_data <- data %>% filter(decile == i)
+  mean_pred_risk <- mean(decile_data$PCE_risk, na.rm = TRUE)
+  
+  ci_decile <- cuminc(
+    ftime = decile_data$follow_up_time,
+    fstatus = decile_data$event,
+    cencode = 0
+  )
+  
+  idx_5yr_decile <- which.min(abs(ci_decile$time - 5))
+  cum_inc_5yr_decile <- ci_decile$est[[1]][idx_5yr_decile]
+  variance_5yr_decile <- ci_decile$var[[1]][idx_5yr_decile]
+  se_5yr_decile <- sqrt(variance_5yr_decile)
+  lower_ci_decile <- cum_inc_5yr_decile - z_value * se_5yr_decile
+  upper_ci_decile <- cum_inc_5yr_decile + z_value * se_5yr_decile
+  
+  results <- rbind(results, data.frame(
+    decile = i,
+    mean_predicted_risk = mean_pred_risk,
+    observed_risk = cum_inc_5yr_decile,
+    lower_ci = lower_ci_decile,
+    upper_ci = upper_ci_decile
+  ))
+}
+
+# Create calibration plot
+ggplot(results, aes(x = mean_predicted_risk, y = observed_risk)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.02) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  xlab("Mean Predicted Risk (%)") +
+  ylab("Observed Risk (%)") +
+  ggtitle("Calibration Plot")
+
+
+data$PCE_risk
+```
+
+
+```{r}
+
+  decile_data <- data %>% filter(decile == 1)
+  mean_pred_risk <- mean(decile_data$PCE_risk, na.rm = TRUE)
+  
+  ci_decile <- cuminc(
+    ftime = decile_data$follow_up_time,
+    fstatus = decile_data$event,
+    cencode = 0
+  )
+  
+  idx_5yr_decile <- which.min(abs(ci_decile$time - 5))
+  cum_inc_5yr_decile <- ci_decile$est[[1]][idx_5yr_decile]
+  variance_5yr_decile <- ci_decile$var[[1]][idx_5yr_decile]
+  se_5yr_decile <- sqrt(variance_5yr_decile)
+  lower_ci_decile <- cum_inc_5yr_decile - z_value * se_5yr_decile
+  upper_ci_decile <- cum_inc_5yr_decile + z_value * se_5yr_decile
+  
+  results <- rbind(results, data.frame(
+    decile = i,
+    mean_predicted_risk = mean_pred_risk,
+    observed_risk = cum_inc_5yr_decile,
+    lower_ci = lower_ci_decile,
+    upper_ci = upper_ci_decile
+  ))
+
+```
+
+
+
+
+
+################# Calculate Observed Risks Using Kalbfleisch–Prentice Estimator
+```{r}
+# Install cmprsk if not already installed
+if (!require(cmprsk)) install.packages("cmprsk")
+library(cmprsk)
+
+# Define event status
+# Since we don't have competing events, we'll treat all non-events as censored
+# If you had data on competing events, you would set event = 2 for those
+
+# Calculate cumulative incidence function
+time_point <- 5  # 5-year cumulative incidence
+
+# Compute CIF using the 'survfit' function with 'type = "fleming-harrington"'
+fit <- survfit(Surv(follow_up_time, event) ~ 1, data = data)
+
+# Extract survival probability at 5 years
+surv_prob_5yr <- summary(fit, times = time_point)$surv
+
+# Observed risk at 5 years is 1 - survival probability
+observed_risk_5yr <- 1 - surv_prob_5yr
+
+# Standard error at 5 years
+std_err <- summary(fit, times = time_point)$std.err
+
+# Calculate 95% confidence intervals using the Wald method
+z_value <- qnorm(0.975)  # For 95% CI
+lower_ci <- observed_risk_5yr - z_value * std_err
+upper_ci <- observed_risk_5yr + z_value * std_err
+
+# Ensure the confidence intervals are within [0,1]
+lower_ci <- pmax(lower_ci, 0)
+upper_ci <- pmin(upper_ci, 1)
+
+# Convert to percentages
+observed_risk_percent <- observed_risk_5yr * 100
+lower_ci_percent <- lower_ci * 100
+upper_ci_percent <- upper_ci * 100
+
+# Output the results
+cat("Observed Risk at", time_point, "years:", observed_risk_percent, "%\n")
+cat("95% CI:", lower_ci_percent, "% to", upper_ci_percent, "%\n")
+
+```
+```{r}
+# Average predicted risk
+average_predicted_risk <- mean(data$PCE_risk)
+sd_predicted_risk <- (sd(data$PCE_risk)/sqrt(nrow(data))) * 1.96
+lower_ci = average_predicted_risk - sd_predicted_risk
+upper_ci = average_predicted_risk + sd_predicted_risk
+
+# Observed risk at 5 years (from earlier)
+observed_risk_5yr
+
+# Relative percentage difference (discordance)
+discordance <- (average_predicted_risk - observed_risk_5yr) / observed_risk_5yr * 100
+
+# Output the results
+cat("Average Predicted Risk at", time_point, "years:", average_predicted_risk * 100, "%\n")
+cat("Observed Risk at", time_point, "years:", observed_risk_percent, "%\n")
+cat("95% CI:", lower_ci_percent, "% to", upper_ci_percent, "%\n")
+cat("Discordance:", discordance, "%\n")
+
+```
+
+
+
+```{r}
+# Divide data into deciles based on predicted risk
+data$decile_predicted <- ntile(data$PCE_risk, 10)
+
+# Calculate average predicted risk and observed risk in each decile
+library(dplyr)
+decile_summary <- data %>%
+  group_by(decile_predicted) %>%
+  summarise(
+    avg_predicted_risk = mean(PCE_risk) * 100,
+    observed_events = sum(event),
+    total = n()
+  )
+
+# Calculate observed risk in each decile
+decile_summary$observed_risk <- (decile_summary$observed_events / decile_summary$total) * 100
+
+# Plotting
+library(ggplot2)
+ggplot(decile_summary, aes(x = avg_predicted_risk, y = observed_risk)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(
+    x = "Average Predicted Risk (%)",
+    y = "Observed Risk (%)",
+    title = "Calibration Plot: Predicted vs Observed Risks"
+  ) +
+  theme_minimal()
+
+```
+```{r}
+# Install and load timeROC
+if (!require(timeROC)) install.packages("timeROC")
+library(timeROC)
+
+# Load necessary packages
+if (!require(CVrisk)) install.packages("CVrisk")
+if (!require(timeROC)) install.packages("timeROC")
+library(CVrisk)
+library(timeROC)
+
+# Prepare variables
+data$gender <- factor(data$gender, levels = c("male", "female"))
+data$race <- factor(data$race, levels = c("white", "african_american", "other"))
+data$bp_treatment <- as.numeric(data$bp_treatment)
+data$smoker <- as.numeric(data$smoker)
+data$diabetes <- as.numeric(data$diabetes)
+
+# Calculate predicted risks
+
+
+# Remove observations with missing values
+roc_data <- data[complete.cases(data$follow_up_time, data$event, data$PCE_risk), ]
+
+# Extract variables for timeROC
+follow_up_time <- roc_data$follow_up_time
+event_status <- roc_data$event
+marker <- roc_data$PCE_risk
+
+# Run timeROC
+event_of_interest <- 1
+time_point <- 5
+
+roc <- timeROC(
+  T = follow_up_time,
+  delta = event_status,
+  marker = marker,
+  cause = event_of_interest,
+  times = time_point,
+  iid = TRUE
+)
+
+length(follow_up_time)
+# Extract C-statistic
+c_statistic <- roc$AUC[1]
+
+# Output the C-statistic
+cat("C-statistic at", time_point, "years:", c_statistic, "\n")
+
+```
+
