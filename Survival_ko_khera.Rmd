@@ -832,3 +832,135 @@ cat("C-statistic at", time_point, "years:", c_statistic, "\n")
 
 ```
 
+
+####Kaplaim meire observed vs spected 
+```{r}
+
+
+data$risk_group  <- cut(
+  data$PCE_risk,
+  breaks = c(-Inf, 0.05, 0.075, 0.20, Inf),
+  labels = c("Low", "Borderline", "Intermediate", "High")
+)
+
+
+```
+
+
+```{r}
+# Ensure time-to-event data is properly formatted
+# Assume 'time' is the follow-up time in years, 'event' is 1 if ASCVD event occurred, 0 otherwise
+
+# Censor participants as per the criteria
+data <- data %>%
+  mutate(
+    time = pmin(follow_up_time, 5), # Follow-up time capped at 5 years
+    status = ifelse(event == 1 & follow_up_time <= 5, 1, 0)
+  )
+
+# Load necessary library
+library(survminer)
+
+# Corrected function to calculate KM estimates for each group
+km_estimates <- function(group_var) {
+  # Construct the formula dynamically
+  fml <- as.formula(paste("Surv(time, status) ~", group_var))
+  surv_fit <- survfit(fml, data = data)
+  surv_summary <- summary(surv_fit, times = 5)
+  
+  # Extract survival probabilities
+  surv_prob <- surv_summary$surv
+  # Handle strata names
+  if (!is.null(surv_summary$strata)) {
+    names(surv_prob) <- gsub("^.*=", "", surv_summary$strata)
+  } else {
+    names(surv_prob) <- "Overall"
+  }
+  return(surv_prob)
+}
+
+# Calculate observed cumulative incidence at 5 years for risk groups
+observed_risk_group <- km_estimates("risk_group")
+
+# Ensure names correspond to levels of risk_group
+names(observed_risk_group) <- levels(data$risk_group)
+
+# Calculate observed cumulative incidence at 5 years for deciles
+observed_decile <- km_estimates("decile")
+
+
+```
+
+
+```{r}
+km_estimates <- function(group_var) {
+  # Construct the formula dynamically
+  fml <- as.formula(paste("Surv(time, status) ~", group_var))
+  surv_fit <- survfit(fml, data = data)
+  surv_summary <- summary(surv_fit, times = 5)
+  
+  # Extract survival probabilities and confidence intervals
+  surv_prob <- surv_summary$surv
+  surv_lower <- surv_summary$lower
+  surv_upper <- surv_summary$upper
+  
+  # Handle strata names
+  if (!is.null(surv_summary$strata)) {
+    group_names <- gsub("^.*=", "", surv_summary$strata)
+  } else {
+    group_names <- "Overall"
+  }
+  
+  # Calculate cumulative incidence (1 - survival probability)
+  cum_incidence <- 1 - surv_prob
+  cum_incidence_lower <- 1 - surv_upper  # Upper limit of survival becomes lower limit of incidence
+  cum_incidence_upper <- 1 - surv_lower  # Lower limit of survival becomes upper limit of incidence
+  
+  # Create a data frame
+  df <- data.frame(
+    group = group_names,
+    cum_incidence = cum_incidence,
+    lower_CI = cum_incidence_lower,
+    upper_CI = cum_incidence_upper
+  )
+  
+  return(df)
+}
+
+
+observed_risk_group_df <- km_estimates("risk_group")
+```
+
+
+```{r}
+# Calculate mean predicted risk and confidence intervals in each risk group
+data$predicted_risk <- data$PCE_risk
+
+mean_predicted_risk_group <- data %>%
+  group_by(risk_group) %>%
+  summarise(
+    n = n(),
+    mean_predicted = mean(predicted_risk),
+    sd_predicted = sd(predicted_risk),
+    sem_predicted = sd_predicted / sqrt(n),
+    lower_CI_predicted = mean_predicted - 1.96 * sem_predicted,
+    upper_CI_predicted = mean_predicted + 1.96 * sem_predicted
+  )
+# Calculate observed cumulative incidence and 95% CI using the updated km_estimates function
+observed_risk_group_df <- km_estimates("risk_group")
+
+# Merge with predicted risk data
+final_df <- observed_risk_group_df %>%
+  left_join(mean_predicted_risk_group, by = c("group" = "risk_group")) %>%
+  select(
+    group,
+    observed_cum_incidence = cum_incidence,
+    observed_lower_CI = lower_CI,
+    observed_upper_CI = upper_CI,
+    predicted_cum_incidence = mean_predicted,
+    predicted_lower_CI = lower_CI_predicted,
+    predicted_upper_CI = upper_CI_predicted
+  )
+
+```
+
